@@ -3,19 +3,19 @@ title: Discord Python bot
 description: A Discord bot written in Python
 tags:
   - python
-  - discord.py
+  - py-cord
 ---
 
 # Discord.py Example
 
-This example starts a Discord bot using [discord.py](https://discordpy.readthedocs.io/en/stable/).
+This example starts a Discord bot using [Pycord](https://pycord.dev).
 
 [![Deploy on Railway](https://railway.app/new/template/PxM3nl)
 
 ## ✨ Features
 
 - Python
-- Discord.py
+- Py-Cord
 
 ## 💁‍♀️ How to use
 
