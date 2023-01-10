@@ -10,7 +10,7 @@ tags:
 
 This example starts a Discord bot using [discord.py](https://discordpy.readthedocs.io/en/stable/).
 
-[![Deploy on Railway](https://railway.app/new/template/PxM3nl)
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template/PxM3nl)
 
 ## ✨ Features
 
