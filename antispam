@@ -1,0 +1,63 @@
+import discord
+from discord.ext import commands
+from collections import defaultdict
+from datetime import datetime, timedelta
+
+# Vytvoření instance bota
+intents = discord.Intents.default()
+intents.messages = True
+intents.guilds = True
+intents.message_content = True
+intents.members = True
+bot = commands.Bot(command_prefix="/", intents=intents)
+
+# Sledování antispamu
+antispam_enabled = False
+message_log = defaultdict(list)  # Sledování zpráv uživatelů
+
+# Slash příkaz pro aktivaci antispamu
+@bot.command()
+async def antispam(ctx):
+    global antispam_enabled
+    antispam_enabled = not antispam_enabled
+    status = "zapnuto" if antispam_enabled else "vypnuto"
+    await ctx.send(f"Antispam byl nyní {status}.")
+
+# Zpracování zpráv
+@bot.event
+async def on_message(message):
+    global antispam_enabled
+
+    # Nezpracovávat zprávy od bota
+    if message.author.bot:
+        return
+
+    # Pokud antispam není zapnutý, ignorujeme zprávy
+    if not antispam_enabled:
+        return
+
+    # Získání aktuálního času a uživatele
+    now = datetime.now()
+    user_id = message.author.id
+
+    # Přidání aktuální zprávy do logu
+    message_log[user_id].append(now)
+
+    # Odstranění starých zpráv mimo 5 sekund
+    message_log[user_id] = [t for t in message_log[user_id] if now - t <= timedelta(seconds=5)]
+
+    # Kontrola počtu zpráv
+    if len(message_log[user_id]) > 5:
+        try:
+            # Udělení timeoutu
+            await message.author.timeout(timedelta(seconds=30), reason="Spam detected")
+            await message.channel.send(f"{message.author.mention} byl umlčen na 30 sekund za spam.")
+        except discord.Forbidden:
+            await message.channel.send("Nemám oprávnění umlčet tohoto uživatele.")
+
+    # Pokračovat zpracováním ostatních příkazů
+    await bot.process_commands(message)
+
+# Spuštění bota
+bot.run("MTMwMzQ0MDEwMjM4MjM3NDk3Mw.Gwekaj.KR9JsPCOP-oC7u4UZKMVbgcoq8ngO7q2o9zi18
+")
