@@ -1,0 +1,9 @@
+{
+  "supportRoleId": "SUPPORT_ROLE_ID",
+  "logChannelId": "LOG_CHANNEL_ID",
+  "reactionRoles": {
+    "messageId": "",
+    "messageContent": "React to assign yourself a role:",
+    "emojiRoleMap": {}
+  }
+}
