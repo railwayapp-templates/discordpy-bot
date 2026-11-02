@@ -194,6 +194,29 @@ class AuthCore:
         with self.lock:
             return self._account("discord_id", str(discord_id))
 
+    def _set_password(self, user_lc, pw):
+        """3.56: forgot password. New hash + salt; every saved login (all phones) stops working."""
+        salt = secrets.token_hex(16)
+        self.db.execute("UPDATE accounts SET pass_hash=?, salt=?, rounds=? WHERE user_lc=?",
+                        (self._hash(pw, salt, PBKDF2_ROUNDS), salt, PBKDF2_ROUNDS, user_lc))
+        self.db.execute("DELETE FROM remember WHERE user_lc=?", (user_lc,))
+        self.db.commit()
+        for k in [k for k, (u, _) in self.logins.items() if u == user_lc]:
+            del self.logins[k]
+
+    def reset_by_discord(self, discord_id, pw):
+        """Discord /resetpass: (ok, message)."""
+        with self.lock:
+            if not (6 <= len(pw) <= 32):
+                return False, "Password: 6-32 characters."
+            if not self._rate(self.fails, "dreset:" + str(discord_id), 5, 3600):
+                return False, "Too many resets. Wait an hour."
+            a = self._account("discord_id", str(discord_id))
+            if not a:
+                return False, "This Discord has no game account yet. Create one in the game (Login screen > New account)."
+            self._set_password(a["user"].lower(), pw)
+            return True, a["user"]
+
     def _hash(self, password, salt, rounds):
         return hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), rounds).hex()
 
@@ -367,6 +390,21 @@ class AuthCore:
             s["vtoken"] = None
             self._forget_dev(s, s["vdiscord"])
             a = self._account("user_lc", user.lower())
+            return self._logged_in(a, q.get("chal", ""), q.get("srv", ""), sid, s)
+        if op == "reset":                                # 3.56: forgot password (after a fresh /gen)
+            if not s.get("vtoken") or not hmac.compare_digest(s["vtoken"], q.get("vtoken", "")) or s.get("vexp", 0) < _now():
+                return {"ok": 0, "again": 1, "err": "Verification expired. Do /gen with the new code."}
+            pw = q.get("pass", "")
+            if not (6 <= len(pw) <= 32):
+                return {"ok": 0, "err": "Password: 6-32 characters"}
+            if not self._rate(self.fails, "reset:" + s["vdiscord"], 5, 3600):
+                return {"ok": 0, "err": "Too many resets. Wait an hour."}
+            a = self._account("discord_id", s["vdiscord"])
+            if not a:
+                return {"ok": 0, "err": "This Discord has no game account yet. Create one."}
+            self._set_password(a["user"].lower(), pw)
+            s["vtoken"] = None
+            self._forget_dev(s, s["vdiscord"])
             return self._logged_in(a, q.get("chal", ""), q.get("srv", ""), sid, s)
         if op == "login":
             user, pw = q.get("user", ""), q.get("pass", "")

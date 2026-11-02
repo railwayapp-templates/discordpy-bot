@@ -16,6 +16,7 @@ server with "Authentication system" on.
    `/gen CODE` in **#verification** (the command works only there; the answer is only visible to them).
 3. The game shows Sign up: user, password, gender, age -> **Create**. Next time: Login only.
 4. `/statsdc` or `/chardc` (Discord, only visible to you, card with Refresh / Switch view buttons) or `/stats` / `/char` in the game: your account.
+5. Forgot your account (3.56): `/forgotuser` shows your game username, `/resetpass` opens a form for a new password (all phones get logged out). In the game: Login screen > Forgot username? / Forgot password?, then `/gen CODE` in #verification.
 
 Accounts are stored only here (SQLite, password hashed with PBKDF2-SHA256 + salt). The game and the
 bot talk end-to-end encrypted (ECDH P-256 + AES-256-GCM) over public MQTT brokers; the bot signs a

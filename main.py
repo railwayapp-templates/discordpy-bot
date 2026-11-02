@@ -3,6 +3,8 @@
   /gen CODE  - only in #verification: links the code shown in the game to your Discord account
   /statsdc   - your game account card (only you see it)   (3.34: renamed from /stats)
   /chardc    - the same card, character style (only you see it)   (3.34: renamed from /char)
+  /forgotuser - 3.56: shows the game username of your Discord (only you see it)
+  /resetpass  - 3.56: a form to set a new game password (logs out your phones)
 
 Settings are environment variables, never put them in the code or in git:
   DISCORD_TOKEN     the bot token (Discord Developer Portal -> Bot -> Reset Token)
@@ -29,7 +31,7 @@ import paho.mqtt.client as mqtt
 
 from authcore import AuthCore, TOPIC_REQ, TOPIC_RES
 
-VERSION = "3.24"
+VERSION = "3.56"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("mpbot")
 
@@ -223,6 +225,38 @@ async def char_cmd(inter: discord.Interaction):
     await show_card(inter, "char")
 
 
+@tree.command(name="forgotuser", description="Forgot your MP Multiplayer username? Shows it (only you see it)")
+async def forgotuser_cmd(inter: discord.Interaction):
+    a = await asyncio.to_thread(core.account_by_discord, inter.user.id)
+    if not a:
+        await inter.response.send_message("This Discord has no game account yet. In the game: Login screen > New account (Discord code).", ephemeral=True)
+        return
+    await inter.response.send_message(f"Your MP Multiplayer username is **{a['user']}**. Forgot the password too? Use /resetpass.", ephemeral=True)
+
+
+class ResetPassModal(discord.ui.Modal, title="MP Multiplayer - new password"):
+    pw = discord.ui.TextInput(label="New password (6-32)", min_length=6, max_length=32)
+    pw2 = discord.ui.TextInput(label="Confirm new password", min_length=6, max_length=32)
+
+    async def on_submit(self, inter: discord.Interaction):
+        if self.pw.value != self.pw2.value:
+            await inter.response.send_message("The passwords do not match. Try /resetpass again.", ephemeral=True)
+            return
+        ok, msg = await asyncio.to_thread(core.reset_by_discord, inter.user.id, self.pw.value)
+        if ok:
+            msg = f"Password changed for **{msg}**. Log in with it in the game (your phones were logged out)."
+        await inter.response.send_message(msg, ephemeral=True)
+
+
+@tree.command(name="resetpass", description="Forgot your MP Multiplayer password? Set a new one (only you see it)")
+async def resetpass_cmd(inter: discord.Interaction):
+    a = await asyncio.to_thread(core.account_by_discord, inter.user.id)
+    if not a:
+        await inter.response.send_message("This Discord has no game account yet. In the game: Login screen > New account (Discord code).", ephemeral=True)
+        return
+    await inter.response.send_modal(ResetPassModal())
+
+
 async def _sync_guild(g):
     try:
         tree.copy_global_to(guild=g)
@@ -318,7 +352,7 @@ async def beacon():
             doc = {
                 "app": APP, "online": client.is_ready(), "ver": VERSION, "commit": COMMIT, "host": HOST_LABEL,
                 "bot": str(client.user) if client.user else "", "guilds": len(client.guilds),
-                "cmds": synced["cmds"] or ["/gen", "/statsdc", "/chardc"], "login": core.ready,
+                "cmds": synced["cmds"] or ["/gen", "/statsdc", "/chardc", "/forgotuser", "/resetpass"], "login": core.ready,
                 "accounts": await asyncio.to_thread(core.account_count), "brokers": bridge.connected(),
                 "ping": round(client.latency * 1000) if client.latency == client.latency else -1,
                 "started": STARTED, "ts": int(time.time()), "py": platform.python_version(),
