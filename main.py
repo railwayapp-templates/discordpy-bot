@@ -31,7 +31,7 @@ import paho.mqtt.client as mqtt
 
 from authcore import AuthCore, TOPIC_REQ, TOPIC_RES
 
-VERSION = "3.56"
+VERSION = "4.03"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("mpbot")
 
@@ -227,14 +227,17 @@ async def char_cmd(inter: discord.Interaction):
 
 @tree.command(name="forgotuser", description="Forgot your MP Multiplayer username? Shows it (only you see it)")
 async def forgotuser_cmd(inter: discord.Interaction):
-    a = await asyncio.to_thread(core.account_by_discord, inter.user.id)
-    if not a:
+    al = await asyncio.to_thread(core.accounts_by_discord, inter.user.id)
+    if not al:
         await inter.response.send_message("This Discord has no game account yet. In the game: Login screen > New account (Discord code).", ephemeral=True)
         return
-    await inter.response.send_message(f"Your MP Multiplayer username is **{a['user']}**. Forgot the password too? Use /resetpass.", ephemeral=True)
+    names = ", ".join(f"**{a['user']}**" for a in al)
+    word = "username is" if len(al) == 1 else f"usernames ({len(al)}/3) are"
+    await inter.response.send_message(f"Your MP Multiplayer {word} {names}. Forgot the password too? Use /resetpass.", ephemeral=True)
 
 
 class ResetPassModal(discord.ui.Modal, title="MP Multiplayer - new password"):
+    user = discord.ui.TextInput(label="Username (needed when you have 2-3 accounts)", required=False, max_length=20)
     pw = discord.ui.TextInput(label="New password (6-32)", min_length=6, max_length=32)
     pw2 = discord.ui.TextInput(label="Confirm new password", min_length=6, max_length=32)
 
@@ -242,7 +245,7 @@ class ResetPassModal(discord.ui.Modal, title="MP Multiplayer - new password"):
         if self.pw.value != self.pw2.value:
             await inter.response.send_message("The passwords do not match. Try /resetpass again.", ephemeral=True)
             return
-        ok, msg = await asyncio.to_thread(core.reset_by_discord, inter.user.id, self.pw.value)
+        ok, msg = await asyncio.to_thread(core.reset_by_discord, inter.user.id, self.pw.value, self.user.value or "")
         if ok:
             msg = f"Password changed for **{msg}**. Log in with it in the game (your phones were logged out)."
         await inter.response.send_message(msg, ephemeral=True)

@@ -33,6 +33,7 @@ VERIFY_TTL = 20 * 60        # after /gen: 20 minutes to fill in the sign up form
 SESSION_TTL = 12 * 3600     # logged in: new tickets (reconnect / host change) without the password
 REMEMBER_TTL = 180 * 24 * 3600   # 3.21.9: saved login in the phone's account.txt (survives mod updates + bot restarts)
 REMEMBER_MAX = 5                 # phones per account
+MAX_ACCOUNTS = 3                 # 4.03: game accounts per Discord account (was 1)
 DEVICE_TTL = 24 * 3600      # 3.21.8: a /gen is remembered for the phone 24 h (game restart -> Create your account)
 DEV_RE = re.compile(r"^[0-9a-f]{32}$")
 PBKDF2_ROUNDS = 200_000
@@ -73,11 +74,12 @@ class AuthCore:
         self.db.execute("""CREATE TABLE IF NOT EXISTS accounts(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user TEXT NOT NULL, user_lc TEXT NOT NULL UNIQUE,
-            discord_id TEXT NOT NULL UNIQUE, discord_name TEXT NOT NULL,
+            discord_id TEXT NOT NULL, discord_name TEXT NOT NULL,
             pass_hash TEXT NOT NULL, salt TEXT NOT NULL, rounds INTEGER NOT NULL,
             gender TEXT NOT NULL, age INTEGER NOT NULL,
             created INTEGER NOT NULL, last_login INTEGER NOT NULL DEFAULT 0, logins INTEGER NOT NULL DEFAULT 0,
             last_server TEXT NOT NULL DEFAULT '')""")
+        self._migrate_multi()
         self.db.execute("""CREATE TABLE IF NOT EXISTS remember(
             tok TEXT PRIMARY KEY, user_lc TEXT NOT NULL, dev TEXT NOT NULL, created INTEGER NOT NULL, expires INTEGER NOT NULL)""")
         self.db.execute("""CREATE TABLE IF NOT EXISTS pending(
@@ -90,6 +92,20 @@ class AuthCore:
         self.avatar_cache = {}  # 3.24: discord_id -> (png bytes, expires)
         self.fails = {}         # key -> [timestamps]
         self.gen_rate = {}      # discord id -> [timestamps]
+
+    def _migrate_multi(self):
+        """4.03: up to MAX_ACCOUNTS game accounts per Discord. Old databases have discord_id UNIQUE:
+        rebuild the table once without it (same columns, same rows)."""
+        row = self.db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='accounts'").fetchone()
+        if not row or "discord_id TEXT NOT NULL UNIQUE" not in row[0]:
+            return
+        new_sql = row[0].replace("discord_id TEXT NOT NULL UNIQUE", "discord_id TEXT NOT NULL").replace("CREATE TABLE accounts", "CREATE TABLE accounts_new", 1)
+        self.db.execute("BEGIN")
+        self.db.execute(new_sql)
+        self.db.execute("INSERT INTO accounts_new SELECT * FROM accounts")
+        self.db.execute("DROP TABLE accounts")
+        self.db.execute("ALTER TABLE accounts_new RENAME TO accounts")
+        self.db.commit()
 
     # ---------------------------------------------------------------- crypto
     @property
@@ -191,8 +207,25 @@ class AuthCore:
         return dict(zip(keys, row))
 
     def account_by_discord(self, discord_id):
+        """The most recently used game account of this Discord (None = none)."""
         with self.lock:
-            return self._account("discord_id", str(discord_id))
+            a = self.accounts_by_discord(discord_id)
+            return a[0] if a else None
+
+    def _accounts_of(self, discord_id):
+        rows = self.db.execute("SELECT user_lc FROM accounts WHERE discord_id=? ORDER BY last_login DESC, created DESC", (str(discord_id),)).fetchall()
+        return [self._account("user_lc", r[0]) for r in rows]
+
+    def accounts_by_discord(self, discord_id):
+        """4.03: every game account of this Discord (max MAX_ACCOUNTS), last used first."""
+        with self.lock:
+            return self._accounts_of(discord_id)
+
+    def account_of(self, discord_id, user):
+        """4.03: one account by name, only when it belongs to this Discord."""
+        with self.lock:
+            a = self._account("user_lc", (user or "").lower())
+            return a if a and a["discord_id"] == str(discord_id) else None
 
     def _set_password(self, user_lc, pw):
         """3.56: forgot password. New hash + salt; every saved login (all phones) stops working."""
@@ -204,16 +237,19 @@ class AuthCore:
         for k in [k for k, (u, _) in self.logins.items() if u == user_lc]:
             del self.logins[k]
 
-    def reset_by_discord(self, discord_id, pw):
-        """Discord /resetpass: (ok, message)."""
+    def reset_by_discord(self, discord_id, pw, user=""):
+        """Discord /resetpass: (ok, message). 4.03: user = which of the (max 3) accounts."""
         with self.lock:
             if not (6 <= len(pw) <= 32):
                 return False, "Password: 6-32 characters."
             if not self._rate(self.fails, "dreset:" + str(discord_id), 5, 3600):
                 return False, "Too many resets. Wait an hour."
-            a = self._account("discord_id", str(discord_id))
-            if not a:
+            al = self._accounts_of(discord_id)
+            if not al:
                 return False, "This Discord has no game account yet. Create one in the game (Login screen > New account)."
+            a = next((x for x in al if x["user"].lower() == (user or "").strip().lower()), None) if user else (al[0] if len(al) == 1 else None)
+            if not a:
+                return False, "This Discord has %d game accounts (%s): type the username of the one to reset." % (len(al), ", ".join(x["user"] for x in al))
             self._set_password(a["user"].lower(), pw)
             return True, a["user"]
 
@@ -328,11 +364,13 @@ class AuthCore:
         row = self.db.execute("SELECT discord_id,discord_name,expires FROM pending WHERE dev=?", (self._dev_key(s["dev"]),)).fetchone()
         if not row or row[2] < _now():
             return None
-        a = self._account("discord_id", row[0])
+        al = self._accounts_of(row[0])
+        a = al[0] if len(al) >= MAX_ACCOUNTS else None   # 4.03: room for another account = Sign up
         s["vtoken"] = secrets.token_hex(16)
         s["vdiscord"], s["vname"] = row[0], row[1]
         s["vexp"] = _now() + VERIFY_TTL
-        push = {"op": "verified", "vtoken": s["vtoken"], "dname": row[1], "has": 1 if a else 0, "user": a["user"] if a else ""}
+        push = {"op": "verified", "vtoken": s["vtoken"], "dname": row[1], "has": 1 if a else 0, "user": a["user"] if a else (al[0]["user"] if al else ""),
+                "count": len(al), "max": MAX_ACCOUNTS, "users": ",".join(x["user"] for x in al)}
         s["vpush"], s["vpush_until"] = push, _now() + 10 * 60
         if a:
             self._forget_dev(s)                      # has an account already: just the Login screen once
@@ -379,8 +417,9 @@ class AuthCore:
                 return {"ok": 0, "err": "Pick a gender"}
             if not age.isdigit() or not (10 <= int(age) <= 99):
                 return {"ok": 0, "err": "Age: 10-99"}
-            if self._account("discord_id", s["vdiscord"]):
-                return {"ok": 0, "err": "This Discord account already has a game account. Log in."}
+            al = self._accounts_of(s["vdiscord"])
+            if len(al) >= MAX_ACCOUNTS:   # 4.03: max 3 game accounts per Discord (was 1)
+                return {"ok": 0, "err": "This Discord already has %d game accounts (the limit): %s. Log in." % (len(al), ", ".join(x["user"] for x in al))}
             if self._account("user_lc", user.lower()):
                 return {"ok": 0, "err": "That username is taken"}
             salt = secrets.token_hex(16)
@@ -399,9 +438,13 @@ class AuthCore:
                 return {"ok": 0, "err": "Password: 6-32 characters"}
             if not self._rate(self.fails, "reset:" + s["vdiscord"], 5, 3600):
                 return {"ok": 0, "err": "Too many resets. Wait an hour."}
-            a = self._account("discord_id", s["vdiscord"])
-            if not a:
+            al = self._accounts_of(s["vdiscord"])
+            if not al:
                 return {"ok": 0, "err": "This Discord has no game account yet. Create one."}
+            want = q.get("user", "").strip().lower()   # 4.03: which account (max 3 per Discord)
+            a = next((x for x in al if x["user"].lower() == want), None) if want else al[0]
+            if not a:
+                return {"ok": 0, "err": "That username is not one of this Discord's accounts: " + ", ".join(x["user"] for x in al)}
             self._set_password(a["user"].lower(), pw)
             s["vtoken"] = None
             self._forget_dev(s, s["vdiscord"])
@@ -463,13 +506,18 @@ class AuthCore:
             s["vtoken"] = secrets.token_hex(16)
             s["vdiscord"], s["vname"] = str(discord_id), _clean(discord_name, 40)
             s["vexp"] = _now() + VERIFY_TTL
-            a = self._account("discord_id", str(discord_id))
-            push = {"op": "verified", "vtoken": s["vtoken"], "dname": s["vname"], "has": 1 if a else 0, "user": a["user"] if a else ""}
+            al = self._accounts_of(discord_id)
+            a = al[0] if len(al) >= MAX_ACCOUNTS else None   # 4.03: full = Login, else Sign up (another account)
+            push = {"op": "verified", "vtoken": s["vtoken"], "dname": s["vname"], "has": 1 if a else 0, "user": a["user"] if a else (al[0]["user"] if al else ""),
+                    "count": len(al), "max": MAX_ACCOUNTS, "users": ",".join(x["user"] for x in al)}
             s["vpush"], s["vpush_until"] = push, _now() + 10 * 60
             if not a:
                 self._remember_dev(s)
+            names = ", ".join(f"**{x['user']}**" for x in al)
             if a:
-                text = f"Verified. You already have the game account **{a['user']}**: log in with it in the game."
+                text = f"Verified. This Discord already has {len(al)}/{MAX_ACCOUNTS} game accounts ({names}): log in with one of them in the game."
+            elif al:
+                text = f"Verified. You have {len(al)}/{MAX_ACCOUNTS} game accounts ({names}). Go back to the game to create another one, or tap Login to use one."
             else:
                 text = "Verified. Go back to the game and create your account."
             return text, [(sid, self.seal(s, push))]
