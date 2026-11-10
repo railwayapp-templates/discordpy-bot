@@ -64,6 +64,7 @@ Never put them in the code:
 | `DISCORD_TOKEN` | the bot token (Discord Developer Portal > Bot > Reset Token) |
 | `AUTH_PRIVATE_KEY` | the 64-hex private key that matches the public key built into the mod |
 | `VERIFY_CHANNEL` | optional, default `verification` |
+| `STREAM_URL` | optional (4.12.2); YouTube / Twitch link for the 24/7 **Streaming** status, `off` = no status. `STATUS_TEXTS` (titles split by `|`) and `STATUS_SECONDS` (default 30) |
 | `DATA_DIR` | optional; MP Railway sets `/var/lib/mp-railway/discordpy-bot`, Docker uses `/data` (volume) |
 | `GLOBAL_SYNC` | optional, `1` = also register the commands globally (they then show twice in servers the bot is in) |
 

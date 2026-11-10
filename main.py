@@ -31,7 +31,7 @@ import paho.mqtt.client as mqtt
 
 from authcore import AuthCore, TOPIC_REQ, TOPIC_RES
 
-VERSION = "4.03"
+VERSION = "4.12.2"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("mpbot")
 
@@ -296,6 +296,35 @@ async def on_ready():
         client._repush = asyncio.create_task(repush_loop())
     if not getattr(client, "_avatars", None):
         client._avatars = asyncio.create_task(avatar_loop())
+    if not getattr(client, "_stream", None) and STREAM_URL:
+        client._stream = asyncio.create_task(stream_loop())
+
+
+# 4.12.2: 24/7 "Streaming" status (YouTube) in this same bot - no second process on the same token.
+# STREAM_URL (YouTube / Twitch link, "off" = no status), STATUS_TEXTS (titles split by |), STATUS_SECONDS.
+STREAM_URL = os.environ.get("STREAM_URL", "https://www.youtube.com/watch?v=aVTcVx1570w").strip()
+if STREAM_URL.lower() in ("", "off", "0", "none"):
+    STREAM_URL = ""
+STATUS_TEXTS = [t.strip() for t in os.environ.get(
+    "STATUS_TEXTS", "Watch on YouTube|Subscribe on YouTube|Join discord.gg/tbsDknk34y|Playing MP - GTA SA Multiplayer").split("|") if t.strip()] or ["Live on YouTube"]
+try:
+    STATUS_SECONDS = max(15, int(os.environ.get("STATUS_SECONDS", "30") or 30))
+except ValueError:
+    STATUS_SECONDS = 30
+
+
+async def stream_loop():
+    log.info("streaming status on: %s (%d titles, every %d s)", STREAM_URL, len(STATUS_TEXTS), STATUS_SECONDS)
+    i = 0
+    while True:
+        try:
+            if client.is_ready():
+                await client.change_presence(status=discord.Status.online,
+                                             activity=discord.Streaming(name=STATUS_TEXTS[i % len(STATUS_TEXTS)], url=STREAM_URL))
+                i += 1
+        except Exception as e:
+            log.warning("streaming status: %s", e)
+        await asyncio.sleep(STATUS_SECONDS)
 
 
 @client.event
@@ -358,7 +387,7 @@ async def beacon():
                 "cmds": synced["cmds"] or ["/gen", "/statsdc", "/chardc", "/forgotuser", "/resetpass"], "login": core.ready,
                 "accounts": await asyncio.to_thread(core.account_count), "brokers": bridge.connected(),
                 "ping": round(client.latency * 1000) if client.latency == client.latency else -1,
-                "started": STARTED, "ts": int(time.time()), "py": platform.python_version(),
+                "started": STARTED, "ts": int(time.time()), "py": platform.python_version(), "stream": STREAM_URL,
             }
             bridge.publish_status(doc)
         except Exception as e:
