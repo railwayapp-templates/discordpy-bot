@@ -31,7 +31,7 @@ import paho.mqtt.client as mqtt
 
 from authcore import AuthCore, TOPIC_REQ, TOPIC_RES
 
-VERSION = "4.12.2"
+VERSION = "4.12.3"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("mpbot")
 
@@ -102,8 +102,11 @@ class Bridge:
             if c.is_connected():
                 c.publish(STATUS_TOPIC, text, qos=1, retain=True)
 
-    def stop(self):
-        offline = json.dumps({"app": APP, "online": False, "ver": VERSION, "ts": int(time.time())})
+    def stop(self, why=""):
+        doc = {"app": APP, "online": False, "ver": VERSION, "ts": int(time.time())}
+        if why:
+            doc["why"] = why   # 4.12.3: the website shows it (e.g. the token was reset)
+        offline = json.dumps(doc)
         for c in self.clients:
             try:
                 c.publish(STATUS_TOPIC, offline, qos=1, retain=True).wait_for_publish(2)
@@ -400,7 +403,20 @@ if __name__ == "__main__":
     if not token:
         raise SystemExit("DISCORD_TOKEN is not set (on MP Railway: sudo mp-railway env set DISCORD_TOKEN)")
     bridge.start()
+    why = ""
     try:
         client.run(token, log_handler=None)
+    except discord.LoginFailure:
+        # 4.12.3: the token was reset in the Developer Portal - tell the website, and wait before the restart
+        # (a fast restart loop with a dead token can get the server's IP blocked by Discord)
+        why = "token rejected (reset?) - on the server: sudo mp-railway env set DISCORD_TOKEN"
+        log.error("Improper token: %s", why)
+        time.sleep(3)
+    except discord.PrivilegedIntentsRequired:
+        why = "privileged intent off - Developer Portal > Bot > Privileged Gateway Intents"
+        log.error(why)
     finally:
-        bridge.stop()
+        bridge.stop(why)
+    if why:
+        time.sleep(60)
+        raise SystemExit(why)
