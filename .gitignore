@@ -136,3 +136,8 @@ dmypy.json
 
 # Cython debug symbols
 cython_debug/
+# accounts database + keys: never in git
+data/
+*.db
+AUTH_PRIVATE_KEY*
+.env

@@ -1,0 +1,41 @@
+# MP Railway cloud runner (3.21.7): the Discord bot online 24/7 from GitHub, no server and no typing.
+# Uses the repository secrets DISCORD_TOKEN + AUTH_PRIVATE_KEY. Each run is one ~5 h 40 min shift;
+# it queues the next shift itself, so the bot stays online. accounts.db is kept encrypted on the
+# mp-railway-data branch. Pushes to main are deployed within 2 minutes.
+# Turn it off (e.g. when the HiveMQ server runs the bot): repository variable CLOUD_RUNNER = off.
+name: MP Railway cloud runner
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/mp-railway-cloud.yml', '.github/mp-railway/**']
+  schedule:
+    - cron: '17 * * * *'   # safety net: restarts the chain if a shift ever failed
+
+concurrency:
+  group: mp-railway-cloud
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # save the encrypted accounts.db on the mp-railway-data branch
+  actions: write    # queue the next shift
+
+jobs:
+  bot:
+    if: vars.CLOUD_RUNNER != 'off'
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -q -r requirements.txt
+      - name: Run the bot (one shift)
+        env:
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          AUTH_PRIVATE_KEY: ${{ secrets.AUTH_PRIVATE_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python .github/mp-railway/runner.py

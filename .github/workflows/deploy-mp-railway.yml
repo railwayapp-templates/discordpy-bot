@@ -1,0 +1,74 @@
+# 3.21.7: automatic deploy to MP Railway (our own Railway on the HiveMQ server).
+# Every push to main (or "Run workflow") logs in to the server over SSH and runs the MP Railway
+# installer with the secrets below - nobody has to type a command on the server.
+#
+# Settings > Secrets and variables > Actions > New repository secret:
+#   DISCORD_TOKEN      bot token (Developer Portal > Bot > Reset Token)
+#   AUTH_PRIVATE_KEY   login system key (already set)
+#   SSH_PASSWORD       the server's SSH password   (or SSH_KEY: a private key that can log in)
+# Variables tab (optional): SSH_HOST (default mpsamp.duckdns.org), SSH_USER (default root), SSH_PORT (default 22)
+name: Deploy to MP Railway
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: mp-railway
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      HOST: ${{ vars.SSH_HOST || 'mpsamp.duckdns.org' }}
+      USER_: ${{ vars.SSH_USER || 'root' }}
+      PORT: ${{ vars.SSH_PORT || '22' }}
+      DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+      AUTH_PRIVATE_KEY: ${{ secrets.AUTH_PRIVATE_KEY }}
+      SSH_KEY: ${{ secrets.SSH_KEY }}
+      SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+    steps:
+      - name: Check secrets
+        id: chk
+        run: |
+          miss=""
+          [ -n "$DISCORD_TOKEN" ] || miss="$miss DISCORD_TOKEN"
+          [ -n "$AUTH_PRIVATE_KEY" ] || miss="$miss AUTH_PRIVATE_KEY"
+          [ -n "$SSH_KEY$SSH_PASSWORD" ] || miss="$miss SSH_PASSWORD(or SSH_KEY)"
+          if [ -n "$miss" ]; then
+            echo "::warning::MP Railway deploy skipped - add these repository secrets:$miss"
+            echo "go=0" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=1" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy over SSH
+        if: steps.chk.outputs.go == '1'
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          ssh-keyscan -p "$PORT" -T 15 "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          SSH=(ssh -p "$PORT" -o BatchMode=no -o ConnectTimeout=20 -o ServerAliveInterval=15)
+          if [ -n "$SSH_KEY" ]; then
+            printf '%s\n' "$SSH_KEY" > ~/.ssh/id && chmod 600 ~/.ssh/id
+            SSH+=(-i ~/.ssh/id -o BatchMode=yes)
+          else
+            sudo apt-get install -y -qq sshpass >/dev/null
+            export SSHPASS="$SSH_PASSWORD"
+            SSH=(sshpass -e "${SSH[@]}" -o PreferredAuthentications=password -o PubkeyAuthentication=no)
+          fi
+          # the secrets travel inside the SSH session (stdin), never on a command line or in the log
+          SUDO="sudo -S -p ''"; [ "$USER_" = root ] && SUDO=""
+          {
+            [ -n "$SUDO" ] && printf '%s\n' "$SSH_PASSWORD"
+            printf 'export DISCORD_TOKEN=%q AUTH_PRIVATE_KEY=%q\n' "$DISCORD_TOKEN" "$AUTH_PRIVATE_KEY"
+            echo 'curl -fsSL https://raw.githubusercontent.com/ThirtyFoxMCx00E1/HiveMQ/main/railway/mp-railway.sh -o /tmp/mp-railway.sh'
+            echo 'bash /tmp/mp-railway.sh setup && rm -f /tmp/mp-railway.sh'
+          } | "${SSH[@]}" "$USER_@$HOST" "$SUDO bash -s"
+
+      - name: Status
+        if: steps.chk.outputs.go == '1'
+        run: echo "Live status - https://thirtyfoxmcx00e1.github.io/wagu/railway.html"

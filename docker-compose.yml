@@ -1,0 +1,11 @@
+# Works as-is with plain Docker, and Dokploy / Coolify / CapRover can import it.
+services:
+  mpbot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - mpbot-data:/data
+
+volumes:
+  mpbot-data:
