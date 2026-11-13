@@ -34,7 +34,7 @@ import paho.mqtt.client as mqtt
 
 from authcore import AuthCore, TOPIC_REQ, TOPIC_RES
 
-VERSION = "4.13.16"
+VERSION = "4.13.17"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("mpbot")
 
@@ -253,7 +253,7 @@ HELP_PAGES = [
      "`/forgotuser` - shows your game username(s)\n"
      "`/resetpass` - set a new game password (logs out your phones)\n"
      "`/help` - this tutorial\n"
-     "`/streaming on` / `off` - (server managers) the bot plays the MP YouTube live 24/7 in a voice channel\n"
+     "`/streaming on` / `off` - (server managers) 24/7 YouTube live in a voice channel: sound by the bot, video with the Watch video button\n"
      "In the game: `/stats`, `/char`, `/coop help`, `/mapedit help`."),
     ("5/5 - Problems?",
      "- **No code / can't log in**: check Wi-Fi or mobile data; the login needs the internet.\n"
@@ -340,7 +340,7 @@ async def resetpass_cmd(inter: discord.Interaction):
 
 # ------------------------------------------------------------------ 4.13.16: /streaming (24/7 YouTube live in a voice channel)
 # Discord bots can not "Go Live" (screen share video), so the bot joins the voice channel and plays the live's
-# sound 24/7; the voice channel status shows the link so everybody can open the video.
+# sound 24/7, and posts a "Watch video" button (Watch Together activity) that shows the video in the voice channel.
 # On: remembered in DATA_DIR/voice_stream.json, so after a redeploy / restart / disconnect the bot comes back by itself.
 # Needs ffmpeg on the server (MP Railway installs it), yt-dlp + deno (requirements.txt).
 VOICE_STREAM_URL = os.environ.get("VOICE_STREAM_URL", "https://www.youtube.com/live/rFZHOHl-L8A").strip()
@@ -455,12 +455,44 @@ class VoiceStream:
 
 vstream = VoiceStream()
 
+# 4.13.16b: Discord blocks video / Go Live for bot accounts, so the video part is Discord's own
+# Watch Together activity: an invite that opens the YouTube player INSIDE the voice channel for everybody who taps it.
+WATCH_TOGETHER_ID = 880218394199220334
+
+
+async def post_watch_panel(ch, url):
+    try:
+        inv = await ch.create_invite(max_age=0, max_uses=0, unique=False, reason="/streaming 24/7",
+                                     target_type=discord.InviteTarget.embedded_application,
+                                     target_application_id=WATCH_TOGETHER_ID)
+    except Exception as e:
+        log.warning("watch together invite: %s", e)
+        inv = None
+    title = vstream.info.get(ch.guild.id, {}).get("title") or "MP 24/7 live"
+    e = discord.Embed(title="LIVE 24/7 - " + title[:200], url=url, color=0xFF0000,
+                      description="**Sound**: the bot is playing it in this voice channel now - just join.\n"
+                                  "**Video**: tap **Watch video** - Discord opens Watch Together in this voice channel, "
+                                  "paste the link below in its search and press play; everybody in the activity sees it together.\n"
+                                  f"`{url}`")
+    e.set_footer(text=f"MP bot {VERSION} · /streaming")
+    v = discord.ui.View(timeout=None)
+    if inv:
+        v.add_item(discord.ui.Button(label="Watch video (in voice)", style=discord.ButtonStyle.link, url=inv.url))
+    v.add_item(discord.ui.Button(label="Open on YouTube", style=discord.ButtonStyle.link, url=url))
+    try:
+        await ch.send(embed=e, view=v)
+        return True
+    except Exception as ex:
+        log.warning("watch panel: %s", ex)
+        return False
+
 
 @tree.command(name="streaming", description="Play the MP YouTube live 24/7 in a voice channel (server managers)")
-@app_commands.describe(mode="on = start 24/7, off = stop, status = what is playing",
+@app_commands.describe(mode="on = start 24/7, off = stop, status = what is playing, watch = post the video panel",
                        channel="voice channel (default: the one you are in)", link="another YouTube live link (optional)")
 @app_commands.choices(mode=[app_commands.Choice(name="on", value="on"), app_commands.Choice(name="off", value="off"),
-                            app_commands.Choice(name="status", value="status")])
+                            app_commands.Choice(name="status", value="status"),
+                            app_commands.Choice(name="watch (post the video panel again)", value="watch")])
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.guild_only()
 async def streaming_cmd(inter: discord.Interaction, mode: app_commands.Choice[str],
@@ -489,6 +521,16 @@ async def streaming_cmd(inter: discord.Interaction, mode: app_commands.Choice[st
                 msg += "\nYouTube wants a login from the server: put a cookies.txt at `" + YT_COOKIES + "`."
         await inter.response.send_message(msg, ephemeral=True)
         return
+    if mode.value == "watch":
+        st = vstream.state.get(g.id)
+        ch = channel or (g.get_channel(st["ch"]) if st else None) or (inter.user.voice.channel if inter.user.voice else None)
+        if not ch:
+            await inter.response.send_message("Join a voice channel first, or pick one with `channel:`.", ephemeral=True)
+            return
+        await inter.response.defer(ephemeral=True)
+        ok = await post_watch_panel(ch, (link or "").strip() or (st or {}).get("url") or VOICE_STREAM_URL)
+        await inter.followup.send("Watch video panel posted in " + ch.mention if ok else "I need Send Messages + Create Invite in " + ch.mention, ephemeral=True)
+        return
     ch = channel or (inter.user.voice.channel if inter.user.voice else None)
     if not ch:
         await inter.response.send_message("Join a voice channel first, or pick one: `/streaming on channel:#voice`.", ephemeral=True)
@@ -506,9 +548,13 @@ async def streaming_cmd(inter: discord.Interaction, mode: app_commands.Choice[st
     if g.voice_client and g.voice_client.is_playing() and link:
         g.voice_client.stop()                    # new link: the loop starts it
     vstream.start(g.id)
-    await inter.response.send_message(
-        f"24/7 stream **on** in {ch.mention}: {url}\nThe bot plays the live's sound there and comes back by itself after restarts. "
-        "Stop it with `/streaming off`.", ephemeral=True)
+    await inter.response.defer(ephemeral=True)
+    posted = await post_watch_panel(ch, url)
+    await inter.followup.send(
+        f"24/7 stream **on** in {ch.mention}: {url}\nThe bot plays the live's sound there 24/7 (back by itself after restarts). "
+        + ("The **Watch video** panel is posted in the voice channel's chat: one tap opens the video inside the voice channel (Watch Together). "
+           if posted else "Could not post the Watch video panel (I need Send Messages + Create Invite in that channel). ")
+        + "Stop it with `/streaming off`.", ephemeral=True)
 
 
 async def _sync_guild(g):
@@ -527,7 +573,7 @@ async def _sync_guild(g):
 @client.event
 async def on_ready():
     log.info("Logged in as %s, in %d server(s) - MP bot %s %s", client.user, len(client.guilds), VERSION, COMMIT)
-    log.info("Invite link (bot + slash commands): https://discord.com/oauth2/authorize?client_id=%s&scope=bot+applications.commands&permissions=281752005249024", client.user.id)
+    log.info("Invite link (bot + slash commands): https://discord.com/oauth2/authorize?client_id=%s&scope=bot+applications.commands&permissions=281752005249025", client.user.id)
     for g in client.guilds:   # guild sync: the commands show up at once
         await _sync_guild(g)
     synced["guilds"], synced["at"] = len(client.guilds), int(time.time())
