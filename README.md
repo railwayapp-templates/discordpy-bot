@@ -15,7 +15,7 @@ server with "Authentication system" on.
 2. In the Discord server ([discord.gg/tbsDknk34y](https://discord.gg/tbsDknk34y)) the player types
    `/gen CODE` in **#verification** (the command works only there; the answer is only visible to them).
 3. The game shows Sign up: user, password, gender, age -> **Create**. Next time: Login only.
-4. `/statsdc` (Discord, only visible to you, card with Refresh / Switch view buttons - Switch view = the character look) or `/stats` / `/char` in the game: your account.
+4. `/stats` (Discord, only visible to you, card with Refresh / Switch view buttons - Switch view = the character look; was `/stats` before 4.13.15) or `/stats` / `/char` in the game: your account.
    `/help` (4.13.15, replaces `/chardc`): the tutorial - install, account, playing, commands, problems (pages, only visible to you).
 5. Forgot your account (3.56): `/forgotuser` shows your game username, `/resetpass` opens a form for a new password (all phones get logged out). In the game: Login screen > Forgot username? / Forgot password?, then `/gen CODE` in #verification.
 
@@ -44,7 +44,7 @@ curl -fsSL https://raw.githubusercontent.com/ThirtyFoxMCx00E1/HiveMQ/main/railwa
 
 It asks for `DISCORD_TOKEN` and `AUTH_PRIVATE_KEY` (hidden input, stored in
 `/etc/mp-railway/discordpy-bot.env`, mode 600, never in git), deploys and prints
-`ONLINE - /gen, /statsdc, /help are in your Discord server`. Termius console: **r) MP Railway**.
+`ONLINE - /gen, /stats, /help are in your Discord server`. Termius console: **r) MP Railway**.
 
 ```
 sudo mp-railway status        online? commit? which servers have the commands

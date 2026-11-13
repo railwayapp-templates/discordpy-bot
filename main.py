@@ -1,8 +1,8 @@
 """MP Multiplayer Discord bot (3.22, runs 24/7 on MP Railway - our own self-hosted Railway).
 
   /gen CODE  - only in #verification: links the code shown in the game to your Discord account
-  /statsdc   - your game account card (only you see it)   (3.34: renamed from /stats)
-  /help      - 4.13.15: tutorial, how to install and use MP (replaces /chardc; the character look is /statsdc > Switch view)
+  /stats     - your game account card (only you see it)   (4.13.15: back to /stats, was /stats)
+  /help      - 4.13.15: tutorial, how to install and use MP (replaces /chardc; the character look is /stats > Switch view)
   /forgotuser - 3.56: shows the game username of your Discord (only you see it)
   /resetpass  - 3.56: a form to set a new game password (logs out your phones)
 
@@ -155,7 +155,7 @@ def _ago(t):
 
 
 def account_card(user: discord.abc.User, a: dict, style: str) -> discord.Embed:
-    """The account UI: one card, two looks (/statsdc = account, Switch view = character)."""
+    """The account UI: one card, two looks (/stats = account, Switch view = character)."""
     if style == "char":
         e = discord.Embed(title=a["user"], description=f"**MP Multiplayer character**\nLinked to {user.mention}", color=0x111111)
         e.add_field(name="Gender", value=a["gender"])
@@ -185,7 +185,7 @@ class CardView(discord.ui.View):
     @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary)
     async def refresh(self, inter: discord.Interaction, button: discord.ui.Button):
         if inter.user.id != self.owner_id:
-            await inter.response.send_message("Use /statsdc yourself to see your own account.", ephemeral=True)
+            await inter.response.send_message("Use /stats yourself to see your own account.", ephemeral=True)
             return
         a = await asyncio.to_thread(core.account_by_discord, inter.user.id)
         if not a:
@@ -196,7 +196,7 @@ class CardView(discord.ui.View):
     @discord.ui.button(label="Switch view", style=discord.ButtonStyle.primary)
     async def switch(self, inter: discord.Interaction, button: discord.ui.Button):
         if inter.user.id != self.owner_id:
-            await inter.response.send_message("Use /statsdc yourself to see your own account.", ephemeral=True)
+            await inter.response.send_message("Use /stats yourself to see your own account.", ephemeral=True)
             return
         self.style = "stats" if self.style == "char" else "char"
         a = await asyncio.to_thread(core.account_by_discord, inter.user.id)
@@ -218,12 +218,12 @@ async def show_card(inter: discord.Interaction, style: str):
     await inter.response.send_message(embed=account_card(inter.user, a, style), view=CardView(inter.user.id, style), ephemeral=True)
 
 
-@tree.command(name="statsdc", description="Your MP Multiplayer account (only you see it)")
+@tree.command(name="stats", description="Your MP Multiplayer account (only you see it)")
 async def stats_cmd(inter: discord.Interaction):
     await show_card(inter, "stats")
 
 
-# 4.13.15: /chardc is gone (the character look is still the "Switch view" button of /statsdc).
+# 4.13.15: /chardc is gone (the character look is still the "Switch view" button of /stats).
 # /help is the tutorial: how to install MP, link your account, play, and the commands - page buttons, only you see it.
 HELP_PAGES = [
     ("1/5 - Install MP Multiplayer",
@@ -246,7 +246,7 @@ HELP_PAGES = [
      "- **Map editor** (owner of a custom server): `/mapedit` - add, move, turn and delete objects."),
     ("4/5 - Discord commands",
      f"`/gen CODE` - link the game's code to your Discord (in #{VERIFY_CHANNEL})\n"
-     "`/statsdc` - your account card (Refresh / Switch view = character look)\n"
+     "`/stats` - your account card (Refresh / Switch view = character look)\n"
      "`/forgotuser` - shows your game username(s)\n"
      "`/resetpass` - set a new game password (logs out your phones)\n"
      "`/help` - this tutorial\n"
@@ -458,7 +458,7 @@ async def beacon():
             doc = {
                 "app": APP, "online": client.is_ready(), "ver": VERSION, "commit": COMMIT, "host": HOST_LABEL,
                 "bot": str(client.user) if client.user else "", "guilds": len(client.guilds),
-                "cmds": synced["cmds"] or ["/gen", "/statsdc", "/help", "/forgotuser", "/resetpass"], "login": core.ready,
+                "cmds": synced["cmds"] or ["/gen", "/stats", "/help", "/forgotuser", "/resetpass"], "login": core.ready,
                 "accounts": await asyncio.to_thread(core.account_count), "brokers": bridge.connected(),
                 "ping": round(client.latency * 1000) if client.latency == client.latency else -1,
                 "started": STARTED, "ts": int(time.time()), "py": platform.python_version(), "stream": STREAM_URL,
