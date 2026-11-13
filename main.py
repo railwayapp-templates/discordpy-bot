@@ -6,6 +6,7 @@
   /forgotuser - 3.56: shows the game username of your Discord (only you see it)
   /resetpass  - 3.56: a form to set a new game password (logs out your phones)
   /streaming on|off - 4.13.16: (server managers) the bot joins a voice channel and plays the YouTube live 24/7
+  /changelog  - 4.13.20: (server managers) posts the mod release changelog (wagu docs/discord/changelog.md) with @everyone
 
 Settings are environment variables, never put them in the code or in git:
   DISCORD_TOKEN     the bot token (Discord Developer Portal -> Bot -> Reset Token)
@@ -26,7 +27,9 @@ import json
 import logging
 import os
 import platform
+import re
 import time
+import urllib.request
 
 import discord
 from discord import app_commands
@@ -34,7 +37,7 @@ import paho.mqtt.client as mqtt
 
 from authcore import AuthCore, TOPIC_REQ, TOPIC_RES
 
-VERSION = "4.13.17"
+VERSION = "4.13.20"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("mpbot")
 
@@ -485,6 +488,64 @@ async def post_watch_panel(ch, url):
     except Exception as ex:
         log.warning("watch panel: %s", ex)
         return False
+
+
+CHANGELOG_URL = os.environ.get("CHANGELOG_URL", "https://raw.githubusercontent.com/ThirtyFoxMCx00E1/wagu/main/docs/discord/changelog.md")
+
+
+def _fetch_changelog() -> str:
+    req = urllib.request.Request(CHANGELOG_URL + "?t=" + str(int(time.time())), headers={"User-Agent": "mpbot", "Cache-Control": "no-cache"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return r.read().decode("utf-8").strip()
+
+
+# 4.13.20: mod release changelog post. The text lives in wagu docs/discord/changelog.md (edit it with each
+# release); link: swaps the download link (e.g. a modsfire link), preview: shows it only to you first.
+@tree.command(name="changelog", description="Post the MP mod release changelog with @everyone (server managers)")
+@app_commands.describe(channel="where to post it (default: this channel)", link="download link to use instead of the GitHub one",
+                       preview="only show it to you, don't post")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guild_only()
+async def changelog_cmd(inter: discord.Interaction, channel: discord.TextChannel | None = None,
+                        link: str | None = None, preview: bool = False):
+    if not inter.user.guild_permissions.manage_guild:
+        await inter.response.send_message("Only server managers can post the changelog.", ephemeral=True)
+        return
+    await inter.response.defer(ephemeral=True)
+    try:
+        text = await asyncio.to_thread(_fetch_changelog)
+    except Exception as ex:
+        await inter.followup.send(f"Couldn't load the changelog: `{str(ex)[:180]}`", ephemeral=True)
+        return
+    if link:
+        link = link.strip().strip("<>")
+        if not link.startswith(("http://", "https://")):
+            await inter.followup.send("The link has to start with https://", ephemeral=True)
+            return
+        links = list(re.finditer(r"\]\((https?://[^)\s]+)\)", text))
+        if links:
+            m = links[-1]
+            text = text[:m.start(1)] + link + text[m.end(1):]
+        else:
+            text += "\n\n" + link
+    if len(text) > 2000:
+        text = text[:1997] + "..."
+    if preview:
+        await inter.followup.send(text, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+        return
+    ch = channel or inter.channel
+    perms = ch.permissions_for(inter.guild.me)
+    if not perms.send_messages:
+        await inter.followup.send(f"I can't send messages in {ch.mention}.", ephemeral=True)
+        return
+    if "@everyone" in text and not perms.mention_everyone:
+        await inter.followup.send(f"Posting without the ping: give me **Mention @everyone** in {ch.mention} for it to ping.", ephemeral=True)
+    try:
+        await ch.send(text, allowed_mentions=discord.AllowedMentions(everyone=True, roles=False, users=False))
+    except discord.HTTPException as ex:
+        await inter.followup.send(f"Discord refused the post: `{str(ex)[:180]}`", ephemeral=True)
+        return
+    await inter.followup.send(f"Changelog posted in {ch.mention}.", ephemeral=True)
 
 
 @tree.command(name="streaming", description="Play the MP YouTube live 24/7 in a voice channel (server managers)")
