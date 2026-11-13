@@ -18,6 +18,7 @@ server with "Authentication system" on.
 4. `/stats` (Discord, only visible to you, card with Refresh / Switch view buttons - Switch view = the character look; was `/stats` before 4.13.15) or `/stats` / `/char` in the game: your account.
    `/help` (4.13.15, replaces `/chardc`): the tutorial - install, account, playing, commands, problems (pages, only visible to you).
 5. Forgot your account (3.56): `/forgotuser` shows your game username, `/resetpass` opens a form for a new password (all phones get logged out). In the game: Login screen > Forgot username? / Forgot password?, then `/gen CODE` in #verification.
+6. 24/7 stream (4.13.16): `/streaming on` (server managers, while you are in a voice channel, or pick `channel:`) - the bot joins and plays the MP YouTube live (https://www.youtube.com/live/rFZHOHl-L8A) there 24/7, also after restarts. `/streaming status`, `/streaming off`. Discord bots can not screen-share video, so it is the live's sound; the voice channel status shows the title. The server needs ffmpeg (MP Railway installs it). If YouTube asks the server to sign in, put a cookies.txt at `DATA_DIR/yt_cookies.txt` (or set `YT_COOKIES`). Re-invite the bot with the new link from the log if it lacks Connect / Speak.
 
 Accounts are stored only here (SQLite, password hashed with PBKDF2-SHA256 + salt). The game and the
 bot talk end-to-end encrypted (ECDH P-256 + AES-256-GCM) over public MQTT brokers; the bot signs a

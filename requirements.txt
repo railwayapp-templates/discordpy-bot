@@ -1,3 +1,5 @@
-discord.py>=2.3.2
+discord.py[voice]>=2.7
 paho-mqtt>=2.0
 cryptography>=42
+yt-dlp>=2026.10
+deno>=2.0

@@ -1,10 +1,11 @@
 """MP Multiplayer Discord bot (3.22, runs 24/7 on MP Railway - our own self-hosted Railway).
 
   /gen CODE  - only in #verification: links the code shown in the game to your Discord account
-  /stats     - your game account card (only you see it)   (4.13.15: back to /stats, was /stats)
+  /stats     - your game account card (only you see it)   (4.13.15: back to /stats, was /statsdc)
   /help      - 4.13.15: tutorial, how to install and use MP (replaces /chardc; the character look is /stats > Switch view)
   /forgotuser - 3.56: shows the game username of your Discord (only you see it)
   /resetpass  - 3.56: a form to set a new game password (logs out your phones)
+  /streaming on|off - 4.13.16: (server managers) the bot joins a voice channel and plays the YouTube live 24/7
 
 Settings are environment variables, never put them in the code or in git:
   DISCORD_TOKEN     the bot token (Discord Developer Portal -> Bot -> Reset Token)
@@ -14,6 +15,8 @@ Settings are environment variables, never put them in the code or in git:
   MP_RAILWAY_APP    set by MP Railway: app name (status beacon topic)
   MP_RAILWAY_COMMIT set by MP Railway: deployed git commit
   MP_RAILWAY_HOST   optional: name shown on the website's Railway page (default "MP Railway")
+  VOICE_STREAM_URL  optional: the YouTube live /streaming plays (default the MP live below)
+  YT_COOKIES        optional: path to a cookies.txt when YouTube asks the server to "sign in"
 
 On MP Railway:   sudo mp-railway setup        (asks for the two keys, deploys, starts, 24/7)
 """
@@ -31,7 +34,7 @@ import paho.mqtt.client as mqtt
 
 from authcore import AuthCore, TOPIC_REQ, TOPIC_RES
 
-VERSION = "4.13.15"
+VERSION = "4.13.16"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("mpbot")
 
@@ -250,6 +253,7 @@ HELP_PAGES = [
      "`/forgotuser` - shows your game username(s)\n"
      "`/resetpass` - set a new game password (logs out your phones)\n"
      "`/help` - this tutorial\n"
+     "`/streaming on` / `off` - (server managers) the bot plays the MP YouTube live 24/7 in a voice channel\n"
      "In the game: `/stats`, `/char`, `/coop help`, `/mapedit help`."),
     ("5/5 - Problems?",
      "- **No code / can't log in**: check Wi-Fi or mobile data; the login needs the internet.\n"
@@ -334,6 +338,179 @@ async def resetpass_cmd(inter: discord.Interaction):
     await inter.response.send_modal(ResetPassModal())
 
 
+# ------------------------------------------------------------------ 4.13.16: /streaming (24/7 YouTube live in a voice channel)
+# Discord bots can not "Go Live" (screen share video), so the bot joins the voice channel and plays the live's
+# sound 24/7; the voice channel status shows the link so everybody can open the video.
+# On: remembered in DATA_DIR/voice_stream.json, so after a redeploy / restart / disconnect the bot comes back by itself.
+# Needs ffmpeg on the server (MP Railway installs it), yt-dlp + deno (requirements.txt).
+VOICE_STREAM_URL = os.environ.get("VOICE_STREAM_URL", "https://www.youtube.com/live/rFZHOHl-L8A").strip()
+YT_COOKIES = os.environ.get("YT_COOKIES", "").strip() or os.path.join(DATA_DIR, "yt_cookies.txt")
+FFMPEG_BEFORE = "-reconnect 1 -reconnect_streamed 1 -reconnect_on_network_error 1 -reconnect_delay_max 10 -rw_timeout 15000000"
+
+
+def _yt_resolve(url):
+    """The live's audio address (expires after a few hours; ffmpeg ends then and we resolve again)."""
+    import yt_dlp
+    opts = {"quiet": True, "no_warnings": True, "noplaylist": True, "format": "bestaudio/best",
+            "live_from_start": False, "socket_timeout": 20}
+    if os.path.isfile(YT_COOKIES):
+        opts["cookiefile"] = YT_COOKIES
+    with yt_dlp.YoutubeDL(opts) as y:
+        info = y.extract_info(url, download=False)
+    if "entries" in info:
+        info = next(e for e in info["entries"] if e)
+    return info["url"], (info.get("title") or "MP live")[:80], info.get("http_headers") or {}
+
+
+class VoiceStream:
+    def __init__(self):
+        self.file = os.path.join(DATA_DIR, "voice_stream.json")
+        try:
+            self.state = {int(k): v for k, v in json.load(open(self.file)).items()}
+        except Exception:
+            self.state = {}                      # guild id -> {"ch": channel id, "url": link}
+        self.tasks, self.info = {}, {}
+
+    def save(self):
+        try:
+            os.makedirs(DATA_DIR, exist_ok=True)
+            with open(self.file + ".tmp", "w") as f:
+                json.dump({str(k): v for k, v in self.state.items()}, f)
+            os.replace(self.file + ".tmp", self.file)
+        except Exception as e:
+            log.warning("voice stream save: %s", e)
+
+    def resume(self):
+        for gid in list(self.state):
+            self.start(gid)
+
+    def start(self, gid):
+        t = self.tasks.get(gid)
+        if t and not t.done():
+            t.cancel()
+        self.tasks[gid] = asyncio.create_task(self.loop(gid))
+
+    async def stop(self, guild):
+        self.state.pop(guild.id, None)
+        self.save()
+        t = self.tasks.pop(guild.id, None)
+        if t:
+            t.cancel()
+        vc = guild.voice_client
+        if vc:
+            await self.set_status(vc.channel, None)
+            await vc.disconnect(force=True)
+
+    async def set_status(self, ch, text):
+        try:
+            if isinstance(ch, discord.VoiceChannel):
+                await ch.edit(status=text)
+        except Exception:
+            pass                                 # needs "Set Voice Channel Status"; only cosmetic
+
+    async def loop(self, gid):
+        fails = 0
+        while gid in self.state:
+            try:
+                st = self.state[gid]
+                g = client.get_guild(gid)
+                ch = g and g.get_channel(st["ch"])
+                if not ch:
+                    await asyncio.sleep(30)
+                    continue
+                vc = g.voice_client
+                if not vc or not vc.is_connected():
+                    if vc:
+                        await vc.disconnect(force=True)
+                    vc = await ch.connect(timeout=30, reconnect=True, self_deaf=True)
+                elif vc.channel.id != ch.id:
+                    await vc.move_to(ch)
+                if not vc.is_playing():
+                    src, title, hdr = await asyncio.to_thread(_yt_resolve, st["url"])
+                    before = FFMPEG_BEFORE
+                    if hdr.get("User-Agent"):
+                        before += ' -user_agent "%s"' % hdr["User-Agent"].replace('"', "")
+                    done = asyncio.Event()
+                    loop = asyncio.get_running_loop()
+                    audio = discord.FFmpegOpusAudio(src, before_options=before, options="-vn -loglevel error")
+                    vc.play(audio, after=lambda e: (e and log.warning("voice stream ended: %s", e), loop.call_soon_threadsafe(done.set)))
+                    self.info[gid] = {"title": title, "since": int(time.time())}
+                    await self.set_status(ch, ("LIVE 24/7: " + title)[:500])
+                    log.info("voice stream on in %s / %s: %s", g, ch, title)
+                    fails = 0
+                    while vc.is_connected() and gid in self.state and not done.is_set():
+                        try:
+                            await asyncio.wait_for(done.wait(), 20)
+                        except asyncio.TimeoutError:
+                            pass
+                await asyncio.sleep(3)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                fails += 1
+                self.info[gid] = {"error": str(e)[:300], "at": int(time.time())}
+                log.warning("voice stream %s (try %d): %s", gid, fails, e)
+                await asyncio.sleep(min(300, 10 * fails))
+
+
+vstream = VoiceStream()
+
+
+@tree.command(name="streaming", description="Play the MP YouTube live 24/7 in a voice channel (server managers)")
+@app_commands.describe(mode="on = start 24/7, off = stop, status = what is playing",
+                       channel="voice channel (default: the one you are in)", link="another YouTube live link (optional)")
+@app_commands.choices(mode=[app_commands.Choice(name="on", value="on"), app_commands.Choice(name="off", value="off"),
+                            app_commands.Choice(name="status", value="status")])
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guild_only()
+async def streaming_cmd(inter: discord.Interaction, mode: app_commands.Choice[str],
+                        channel: discord.VoiceChannel | None = None, link: str | None = None):
+    g = inter.guild
+    if not inter.user.guild_permissions.manage_guild:
+        await inter.response.send_message("Only server managers can turn the 24/7 stream on or off.", ephemeral=True)
+        return
+    if mode.value == "off":
+        await inter.response.defer(ephemeral=True)
+        await vstream.stop(g)
+        await inter.followup.send("24/7 stream **off** - the bot left the voice channel.", ephemeral=True)
+        return
+    if mode.value == "status":
+        st, info = vstream.state.get(g.id), vstream.info.get(g.id, {})
+        if not st:
+            await inter.response.send_message("24/7 stream is **off**. Turn it on: `/streaming on` (in a voice channel).", ephemeral=True)
+            return
+        ch = g.get_channel(st["ch"])
+        msg = f"24/7 stream **on** in {ch.mention if ch else 'a deleted channel'}\n{st['url']}"
+        if info.get("title"):
+            msg += f"\nPlaying: **{info['title']}** since <t:{info['since']}:R>"
+        if info.get("error"):
+            msg += f"\nLast problem: `{info['error'][:180]}` (it keeps trying)"
+            if "sign in" in info["error"].lower():
+                msg += "\nYouTube wants a login from the server: put a cookies.txt at `" + YT_COOKIES + "`."
+        await inter.response.send_message(msg, ephemeral=True)
+        return
+    ch = channel or (inter.user.voice.channel if inter.user.voice else None)
+    if not ch:
+        await inter.response.send_message("Join a voice channel first, or pick one: `/streaming on channel:#voice`.", ephemeral=True)
+        return
+    perms = ch.permissions_for(g.me)
+    if not (perms.connect and perms.speak):
+        await inter.response.send_message(f"I need **Connect** and **Speak** in {ch.mention}.", ephemeral=True)
+        return
+    url = (link or "").strip() or vstream.state.get(g.id, {}).get("url") or VOICE_STREAM_URL
+    if not (url.startswith("https://") and ("youtube.com/" in url or "youtu.be/" in url)):
+        await inter.response.send_message("The link must be a YouTube link (https://www.youtube.com/live/...).", ephemeral=True)
+        return
+    vstream.state[g.id] = {"ch": ch.id, "url": url, "by": inter.user.id}
+    vstream.save()
+    if g.voice_client and g.voice_client.is_playing() and link:
+        g.voice_client.stop()                    # new link: the loop starts it
+    vstream.start(g.id)
+    await inter.response.send_message(
+        f"24/7 stream **on** in {ch.mention}: {url}\nThe bot plays the live's sound there and comes back by itself after restarts. "
+        "Stop it with `/streaming off`.", ephemeral=True)
+
+
 async def _sync_guild(g):
     try:
         tree.copy_global_to(guild=g)
@@ -350,7 +527,7 @@ async def _sync_guild(g):
 @client.event
 async def on_ready():
     log.info("Logged in as %s, in %d server(s) - MP bot %s %s", client.user, len(client.guilds), VERSION, COMMIT)
-    log.info("Invite link (bot + slash commands): https://discord.com/oauth2/authorize?client_id=%s&scope=bot+applications.commands&permissions=277025392640", client.user.id)
+    log.info("Invite link (bot + slash commands): https://discord.com/oauth2/authorize?client_id=%s&scope=bot+applications.commands&permissions=281752005249024", client.user.id)
     for g in client.guilds:   # guild sync: the commands show up at once
         await _sync_guild(g)
     synced["guilds"], synced["at"] = len(client.guilds), int(time.time())
@@ -370,13 +547,14 @@ async def on_ready():
         client._repush = asyncio.create_task(repush_loop())
     if not getattr(client, "_avatars", None):
         client._avatars = asyncio.create_task(avatar_loop())
+    vstream.resume()
     if not getattr(client, "_stream", None) and STREAM_URL:
         client._stream = asyncio.create_task(stream_loop())
 
 
 # 4.12.2: 24/7 "Streaming" status (YouTube) in this same bot - no second process on the same token.
 # STREAM_URL (YouTube / Twitch link, "off" = no status), STATUS_TEXTS (titles split by |), STATUS_SECONDS.
-STREAM_URL = os.environ.get("STREAM_URL", "https://www.youtube.com/watch?v=aVTcVx1570w").strip()
+STREAM_URL = os.environ.get("STREAM_URL", "https://www.youtube.com/live/rFZHOHl-L8A").strip()
 if STREAM_URL.lower() in ("", "off", "0", "none"):
     STREAM_URL = ""
 STATUS_TEXTS = [t.strip() for t in os.environ.get(
@@ -458,7 +636,7 @@ async def beacon():
             doc = {
                 "app": APP, "online": client.is_ready(), "ver": VERSION, "commit": COMMIT, "host": HOST_LABEL,
                 "bot": str(client.user) if client.user else "", "guilds": len(client.guilds),
-                "cmds": synced["cmds"] or ["/gen", "/stats", "/help", "/forgotuser", "/resetpass"], "login": core.ready,
+                "cmds": synced["cmds"] or ["/gen", "/stats", "/help", "/forgotuser", "/resetpass", "/streaming"], "login": core.ready,
                 "accounts": await asyncio.to_thread(core.account_count), "brokers": bridge.connected(),
                 "ping": round(client.latency * 1000) if client.latency == client.latency else -1,
                 "started": STARTED, "ts": int(time.time()), "py": platform.python_version(), "stream": STREAM_URL,

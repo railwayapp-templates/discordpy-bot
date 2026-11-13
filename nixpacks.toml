@@ -1,6 +1,6 @@
 # Nixpacks (Coolify / Dokploy / Railway-style builders): Python 3.11, worker process (no port)
 [phases.setup]
-nixPkgs = ["python311"]
+nixPkgs = ["python311", "ffmpeg"]
 
 [phases.install]
 cmds = ["python -m venv /opt/venv && . /opt/venv/bin/activate && pip install -r requirements.txt"]
