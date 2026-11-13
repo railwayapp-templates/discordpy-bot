@@ -2,7 +2,7 @@
 
   /gen CODE  - only in #verification: links the code shown in the game to your Discord account
   /statsdc   - your game account card (only you see it)   (3.34: renamed from /stats)
-  /chardc    - the same card, character style (only you see it)   (3.34: renamed from /char)
+  /help      - 4.13.15: tutorial, how to install and use MP (replaces /chardc; the character look is /statsdc > Switch view)
   /forgotuser - 3.56: shows the game username of your Discord (only you see it)
   /resetpass  - 3.56: a form to set a new game password (logs out your phones)
 
@@ -31,7 +31,7 @@ import paho.mqtt.client as mqtt
 
 from authcore import AuthCore, TOPIC_REQ, TOPIC_RES
 
-VERSION = "4.12.3"
+VERSION = "4.13.15"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("mpbot")
 
@@ -155,7 +155,7 @@ def _ago(t):
 
 
 def account_card(user: discord.abc.User, a: dict, style: str) -> discord.Embed:
-    """The account UI: one card, two looks (/statsdc = account, /chardc = character)."""
+    """The account UI: one card, two looks (/statsdc = account, Switch view = character)."""
     if style == "char":
         e = discord.Embed(title=a["user"], description=f"**MP Multiplayer character**\nLinked to {user.mention}", color=0x111111)
         e.add_field(name="Gender", value=a["gender"])
@@ -223,9 +223,80 @@ async def stats_cmd(inter: discord.Interaction):
     await show_card(inter, "stats")
 
 
-@tree.command(name="chardc", description="Your MP Multiplayer character card (only you see it)")
-async def char_cmd(inter: discord.Interaction):
-    await show_card(inter, "char")
+# 4.13.15: /chardc is gone (the character look is still the "Switch view" button of /statsdc).
+# /help is the tutorial: how to install MP, link your account, play, and the commands - page buttons, only you see it.
+HELP_PAGES = [
+    ("1/5 - Install MP Multiplayer",
+     "1. GTA SA 2.00 (Android) with **AML 1.4.0**.\n"
+     "2. Download MP from **https://mpsamp-open.github.io** (or the newest release on GitHub: ThirtyFoxMCx00E1/wagu).\n"
+     "3. Copy `libMP64.so` (64-bit game) or `libMP32.so` (32-bit game) to\n`Android/data/com.rockstargames.gtasa/mods/`\n"
+     "4. Copy the `MP` folder to `Android/data/com.rockstargames.gtasa/files/TYFMC/MP/`\n"
+     "5. Start the game and tap the **MP** bubble on the right edge of the screen."),
+    ("2/5 - Your MP account (login)",
+     "Servers with the login system on ask you to log in:\n"
+     "1. Join the server: the game shows an **8-character code** (new every time).\n"
+     f"2. Type `/gen CODE` in **#{VERIFY_CHANNEL}** (only works there, only you see the answer).\n"
+     "3. In the game: **Sign up** (user, password, gender, age) -> Create. Next time: just Login.\n"
+     "Up to 3 accounts per Discord. The default server has the login off unless an [ADMIN] / [MOD] turns it on."),
+    ("3/5 - Playing",
+     "- **Default server**: tap *Connect* - everybody on the same Wi-Fi / hotspot or the internet lobby meets there.\n"
+     "- **Custom server**: *Host your own server*, pick a name + port (1923+), turn on *Host server*. Others tap **Join**.\n"
+     "- **Mission sync**: player list > Mission sync - your group sees each other on missions.\n"
+     "- **Co-op story (2 players)**: player list > Co-op story or `/coop invite <id>` - play the host's story together.\n"
+     "- **Map editor** (owner of a custom server): `/mapedit` - add, move, turn and delete objects."),
+    ("4/5 - Discord commands",
+     f"`/gen CODE` - link the game's code to your Discord (in #{VERIFY_CHANNEL})\n"
+     "`/statsdc` - your account card (Refresh / Switch view = character look)\n"
+     "`/forgotuser` - shows your game username(s)\n"
+     "`/resetpass` - set a new game password (logs out your phones)\n"
+     "`/help` - this tutorial\n"
+     "In the game: `/stats`, `/char`, `/coop help`, `/mapedit help`."),
+    ("5/5 - Problems?",
+     "- **No code / can't log in**: check Wi-Fi or mobile data; the login needs the internet.\n"
+     "- **Code not accepted**: it changes every join - use the newest one, in the right channel.\n"
+     "- **Forgot username / password**: `/forgotuser`, `/resetpass` (or in the game: Login screen > Forgot...).\n"
+     "- **Black loading screen / freeze on join**: update to the newest MP (4.13.15+).\n"
+     "- Still stuck? Ask in the server with a screenshot."),
+]
+
+
+def help_embed(i: int) -> discord.Embed:
+    t, d = HELP_PAGES[i]
+    e = discord.Embed(title=f"MP Multiplayer tutorial - {t}", description=d, color=0xD7263D)
+    e.set_footer(text=f"MP bot {VERSION} · only you see this")
+    return e
+
+
+class HelpView(discord.ui.View):
+    def __init__(self, owner_id: int):
+        super().__init__(timeout=900)
+        self.owner_id, self.page = owner_id, 0
+        self._fix()
+
+    def _fix(self):
+        self.prev.disabled = self.page == 0
+        self.next.disabled = self.page == len(HELP_PAGES) - 1
+
+    async def _go(self, inter: discord.Interaction, d: int):
+        if inter.user.id != self.owner_id:
+            await inter.response.send_message("Use /help yourself to open your own tutorial.", ephemeral=True)
+            return
+        self.page = max(0, min(len(HELP_PAGES) - 1, self.page + d))
+        self._fix()
+        await inter.response.edit_message(embed=help_embed(self.page), view=self)
+
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary)
+    async def prev(self, inter: discord.Interaction, button: discord.ui.Button):
+        await self._go(inter, -1)
+
+    @discord.ui.button(label="Next", style=discord.ButtonStyle.primary)
+    async def next(self, inter: discord.Interaction, button: discord.ui.Button):
+        await self._go(inter, 1)
+
+
+@tree.command(name="help", description="Tutorial: how to install and use MP Multiplayer (only you see it)")
+async def help_cmd(inter: discord.Interaction):
+    await inter.response.send_message(embed=help_embed(0), view=HelpView(inter.user.id), ephemeral=True)
 
 
 @tree.command(name="forgotuser", description="Forgot your MP Multiplayer username? Shows it (only you see it)")
@@ -387,7 +458,7 @@ async def beacon():
             doc = {
                 "app": APP, "online": client.is_ready(), "ver": VERSION, "commit": COMMIT, "host": HOST_LABEL,
                 "bot": str(client.user) if client.user else "", "guilds": len(client.guilds),
-                "cmds": synced["cmds"] or ["/gen", "/statsdc", "/chardc", "/forgotuser", "/resetpass"], "login": core.ready,
+                "cmds": synced["cmds"] or ["/gen", "/statsdc", "/help", "/forgotuser", "/resetpass"], "login": core.ready,
                 "accounts": await asyncio.to_thread(core.account_count), "brokers": bridge.connected(),
                 "ping": round(client.latency * 1000) if client.latency == client.latency else -1,
                 "started": STARTED, "ts": int(time.time()), "py": platform.python_version(), "stream": STREAM_URL,
